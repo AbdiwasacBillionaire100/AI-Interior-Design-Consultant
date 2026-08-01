@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
@@ -11,6 +12,311 @@ const PORT = 3000;
 
 // Middleware for parsing JSON requests
 app.use(express.json({ limit: '20mb' }));
+
+// ==========================================
+// SECURITY & AUTHENTICATION MEMORY STORE
+// ==========================================
+
+interface StoredUser {
+  id: string;
+  fullName: string;
+  email: string;
+  role: string;
+  preferredStyle: string;
+  avatarUrl: string;
+  salt: string;
+  passwordHash: string;
+  createdAt: string;
+  lastLoginAt?: string;
+  loginCount: number;
+}
+
+interface StoredAuditLog {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userRole: string;
+  action: 'REGISTER' | 'LOGIN' | 'LOGOUT';
+  timestamp: string;
+  ipAddress: string;
+  userAgent: string;
+  details?: string;
+}
+
+// Password hashing utility using PBKDF2 with salt
+function hashPassword(password: string, salt: string): string {
+  return crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+}
+
+function generateSalt(): string {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+// In-Memory Storage for Users & Audit Activity Logs
+const usersDb: Map<string, StoredUser> = new Map();
+const auditLogsDb: StoredAuditLog[] = [];
+
+// Pre-seed initial sample registered users & audit history for demo view
+function seedInitialUsers() {
+  if (usersDb.size > 0) return;
+
+  const adminSalt = generateSalt();
+  const adminUser: StoredUser = {
+    id: 'user-admin-1',
+    fullName: 'Elena Vance',
+    email: 'elena.vance@aurainterior.com',
+    role: 'Admin / Senior Interior Designer',
+    preferredStyle: 'Mid-Century Modern',
+    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=200&auto=format&fit=crop',
+    salt: adminSalt,
+    passwordHash: hashPassword('AdminPass123!', adminSalt),
+    createdAt: new Date(Date.now() - 7 * 86400000).toISOString(),
+    lastLoginAt: new Date(Date.now() - 3600000).toISOString(),
+    loginCount: 14
+  };
+
+  const clientSalt = generateSalt();
+  const clientUser: StoredUser = {
+    id: 'user-client-1',
+    fullName: 'Marcus Sterling',
+    email: 'marcus.sterling@example.com',
+    role: 'Homeowner / Client',
+    preferredStyle: 'Japandi',
+    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop',
+    salt: clientSalt,
+    passwordHash: hashPassword('ClientPass123!', clientSalt),
+    createdAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+    lastLoginAt: new Date(Date.now() - 12000000).toISOString(),
+    loginCount: 5
+  };
+
+  const designerSalt = generateSalt();
+  const designerUser: StoredUser = {
+    id: 'user-designer-2',
+    fullName: 'Sophia Chen',
+    email: 'sophia.chen@designstudio.io',
+    role: 'Architect',
+    preferredStyle: 'Scandinavian',
+    avatarUrl: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?q=80&w=200&auto=format&fit=crop',
+    salt: designerSalt,
+    passwordHash: hashPassword('DesignerPass123!', designerSalt),
+    createdAt: new Date(Date.now() - 1 * 86400000).toISOString(),
+    lastLoginAt: new Date(Date.now() - 1800000).toISOString(),
+    loginCount: 8
+  };
+
+  usersDb.set(adminUser.email.toLowerCase(), adminUser);
+  usersDb.set(clientUser.email.toLowerCase(), clientUser);
+  usersDb.set(designerUser.email.toLowerCase(), designerUser);
+
+  // Initial Seed Audit Logs
+  auditLogsDb.push(
+    {
+      id: 'audit-1',
+      userId: adminUser.id,
+      userName: adminUser.fullName,
+      userEmail: adminUser.email,
+      userRole: adminUser.role,
+      action: 'REGISTER',
+      timestamp: adminUser.createdAt,
+      ipAddress: '192.168.1.10',
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      details: 'Registered as System Admin & Senior Designer'
+    },
+    {
+      id: 'audit-2',
+      userId: clientUser.id,
+      userName: clientUser.fullName,
+      userEmail: clientUser.email,
+      userRole: clientUser.role,
+      action: 'REGISTER',
+      timestamp: clientUser.createdAt,
+      ipAddress: '172.56.21.88',
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X)',
+      details: 'Registered with Japandi design preference'
+    },
+    {
+      id: 'audit-3',
+      userId: designerUser.id,
+      userName: designerUser.fullName,
+      userEmail: designerUser.email,
+      userRole: designerUser.role,
+      action: 'REGISTER',
+      timestamp: designerUser.createdAt,
+      ipAddress: '68.192.44.12',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      details: 'Registered with Scandinavian preference'
+    },
+    {
+      id: 'audit-4',
+      userId: adminUser.id,
+      userName: adminUser.fullName,
+      userEmail: adminUser.email,
+      userRole: adminUser.role,
+      action: 'LOGIN',
+      timestamp: adminUser.lastLoginAt!,
+      ipAddress: '192.168.1.10',
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      details: 'Successful secure authentication'
+    }
+  );
+}
+
+seedInitialUsers();
+
+// Helper to sanitize user object (strip salt & passwordHash)
+function sanitizeUser(user: StoredUser) {
+  const { salt, passwordHash, ...safe } = user;
+  return safe;
+}
+
+// AUTH API ENDPOINTS
+
+// 1. Register Endpoint
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const { fullName, email, password, role, preferredStyle, avatarUrl } = req.body;
+
+    if (!fullName || !email || !password) {
+      return res.status(400).json({ success: false, error: 'Full name, email, and password are required.' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (usersDb.has(normalizedEmail)) {
+      return res.status(409).json({ success: false, error: 'An account with this email already exists.' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
+    }
+
+    const salt = generateSalt();
+    const passwordHash = hashPassword(password, salt);
+    const userId = `user-${Date.now()}`;
+    const createdAt = new Date().toISOString();
+
+    const newUser: StoredUser = {
+      id: userId,
+      fullName: fullName.trim(),
+      email: normalizedEmail,
+      role: role || 'Homeowner / Client',
+      preferredStyle: preferredStyle || 'Mid-Century Modern',
+      avatarUrl: avatarUrl || `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200&auto=format&fit=crop`,
+      salt,
+      passwordHash,
+      createdAt,
+      lastLoginAt: createdAt,
+      loginCount: 1
+    };
+
+    usersDb.set(normalizedEmail, newUser);
+
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'Unknown Browser';
+
+    // Log Registration Event in Audit Database
+    const auditEntry: StoredAuditLog = {
+      id: `audit-${Date.now()}`,
+      userId: newUser.id,
+      userName: newUser.fullName,
+      userEmail: newUser.email,
+      userRole: newUser.role,
+      action: 'REGISTER',
+      timestamp: createdAt,
+      ipAddress: clientIp,
+      userAgent: userAgent.slice(0, 100),
+      details: `Registered account with preferred style: ${newUser.preferredStyle}`
+    };
+
+    auditLogsDb.unshift(auditEntry);
+
+    const token = `aura_jwt_token_${userId}_${Date.now()}`;
+
+    return res.json({
+      success: true,
+      user: sanitizeUser(newUser),
+      token
+    });
+  } catch (err: any) {
+    console.error('Registration error:', err);
+    return res.status(500).json({ success: false, error: 'Internal registration error.' });
+  }
+});
+
+// 2. Login Endpoint
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email and password are required.' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = usersDb.get(normalizedEmail);
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password.' });
+    }
+
+    const computedHash = hashPassword(password, user.salt);
+    if (computedHash !== user.passwordHash) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password.' });
+    }
+
+    // Update login stats
+    user.loginCount += 1;
+    user.lastLoginAt = new Date().toISOString();
+
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'Unknown Browser';
+
+    // Record Login Event in Audit Log Database
+    const auditEntry: StoredAuditLog = {
+      id: `audit-${Date.now()}`,
+      userId: user.id,
+      userName: user.fullName,
+      userEmail: user.email,
+      userRole: user.role,
+      action: 'LOGIN',
+      timestamp: user.lastLoginAt,
+      ipAddress: clientIp,
+      userAgent: userAgent.slice(0, 100),
+      details: `Successful authenticated login (Session #${user.loginCount})`
+    };
+
+    auditLogsDb.unshift(auditEntry);
+
+    const token = `aura_jwt_token_${user.id}_${Date.now()}`;
+
+    return res.json({
+      success: true,
+      user: sanitizeUser(user),
+      token
+    });
+  } catch (err: any) {
+    console.error('Login error:', err);
+    return res.status(500).json({ success: false, error: 'Internal login error.' });
+  }
+});
+
+// 3. Registered Users & Audit Logs Inspection Endpoint
+app.get('/api/auth/audit-logs', (req, res) => {
+  try {
+    const registeredUsers = Array.from(usersDb.values()).map(sanitizeUser);
+    return res.json({
+      success: true,
+      totalUsersCount: registeredUsers.length,
+      users: registeredUsers,
+      auditLogs: auditLogsDb
+    });
+  } catch (err: any) {
+    console.error('Error fetching audit logs:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch user directory and audit logs.' });
+  }
+});
 
 // Helper to instantiate Gemini client securely
 function getGeminiClient() {

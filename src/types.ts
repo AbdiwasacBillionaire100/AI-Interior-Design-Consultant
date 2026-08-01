@@ -89,3 +89,36 @@ export interface MoodboardState {
   savedItems: ShoppableItem[];
   savedDesigns: ReimaginedDesign[];
 }
+
+export type UserRole = 'Admin' | 'Senior Interior Designer' | 'Homeowner / Client' | 'Architect' | 'Decor Enthusiast';
+
+export interface User {
+  id: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  preferredStyle: string;
+  avatarUrl: string;
+  createdAt: string;
+  lastLoginAt?: string;
+  loginCount: number;
+}
+
+export interface AuditLog {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userRole: string;
+  action: 'REGISTER' | 'LOGIN' | 'LOGOUT';
+  timestamp: string;
+  ipAddress: string;
+  userAgent: string;
+  details?: string;
+}
+
+export interface AuthState {
+  user: User | null;
+  token: string | null;
+  isAuthenticated: boolean;
+}

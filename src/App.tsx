@@ -6,14 +6,29 @@ import { CompareSlider } from './components/CompareSlider';
 import { RefinementChat } from './components/RefinementChat';
 import { ColorPaletteView } from './components/ColorPaletteView';
 import { ShoppableDrawer } from './components/ShoppableDrawer';
+import { AuthModal } from './components/AuthModal';
+import { UserAuditView } from './components/UserAuditView';
 
-import { Room, RoomType, StylePreset, ReimaginedDesign, ChatMessage, ShoppableItem } from './types';
+import { Room, RoomType, StylePreset, ReimaginedDesign, ChatMessage, ShoppableItem, User } from './types';
 import { SAMPLE_ROOMS, SAMPLE_PRESET_DESIGNS } from './data/sampleRooms';
 import { STYLE_PRESETS } from './data/stylePresets';
-import { Sparkles, Compass, Lightbulb, BookmarkCheck, ArrowRight, Palette, Layers } from 'lucide-react';
+import { Sparkles, Compass, Lightbulb, BookmarkCheck, ArrowRight, Palette, Layers, ShieldCheck, Users } from 'lucide-react';
 
 export default function App() {
-  // 1. Initial State
+  // 1. Initial State & Auth Management
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const saved = localStorage.getItem('aura_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
+  const [isAuditViewOpen, setIsAuditViewOpen] = useState<boolean>(false);
+
   const [currentRoom, setCurrentRoom] = useState<Room>(SAMPLE_ROOMS[0]);
   const [selectedStyle, setSelectedStyle] = useState<StylePreset>(STYLE_PRESETS[0]);
   const [customPrompt, setCustomPrompt] = useState<string>('');
@@ -48,6 +63,32 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+
+  // Auth Handlers
+  const handleOpenAuth = (mode: 'login' | 'register') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  };
+
+  const handleSuccessAuth = (user: User, token: string) => {
+    setCurrentUser(user);
+    // Add welcome message in chat for newly logged in user
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `auth-msg-${Date.now()}`,
+        sender: 'ai',
+        text: `Welcome back, ${user.fullName}! Authenticated as ${user.role}. Your preferred style is set to "${user.preferredStyle}".`,
+        timestamp: 'Just now'
+      }
+    ]);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('aura_user');
+    localStorage.removeItem('aura_token');
+    setCurrentUser(null);
+  };
 
   // 2. Handle Custom Room Upload
   const handleCustomImageUpload = async (dataUrl: string, roomType: RoomType, title: string) => {
@@ -262,6 +303,10 @@ export default function App() {
           setSelectedStyle(STYLE_PRESETS[0]);
           setActiveDesign(SAMPLE_PRESET_DESIGNS['living-room-basic']['mid-century-modern']);
         }}
+        currentUser={currentUser}
+        onOpenAuth={handleOpenAuth}
+        onOpenAudit={() => setIsAuditViewOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Layout */}
@@ -406,6 +451,21 @@ export default function App() {
         savedItems={savedItems}
         onRemoveItem={handleRemoveSavedItem}
         onClearAll={() => setSavedItems([])}
+      />
+
+      {/* Auth Modal (Login / Register) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccessAuth={handleSuccessAuth}
+        initialMode={authModalMode}
+      />
+
+      {/* User Directory & Security Audit View */}
+      <UserAuditView
+        isOpen={isAuditViewOpen}
+        onClose={() => setIsAuditViewOpen(false)}
+        currentUser={currentUser}
       />
 
       {/* Footer */}
